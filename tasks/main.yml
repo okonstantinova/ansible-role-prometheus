@@ -1,0 +1,99 @@
+---
+- name: Check if Python3 binary exists
+  ansible.builtin.stat:
+    path: /usr/bin/python3
+  register: python3_check
+
+- name: Install Python3 if not present
+  ansible.builtin.apt:
+    name: python3
+    state: present
+    update_cache: yes
+  when: not python3_check.stat.exists
+
+- name: Ensure Prometheus user exists
+  ansible.builtin.user:
+    name: prometheus
+    shell: /bin/false
+    create_home: no
+    system: yes
+
+- name: Ensure Prometheus directory exists
+  ansible.builtin.file:
+    path: "/tmp/prometheus_{{ prometheus_version }}"
+    state: directory
+
+- name: Download Prometheus
+  ansible.builtin.get_url:
+    url: "{{ prometheus_url }}"
+    dest: "/tmp/prometheus_{{ prometheus_version }}.tar.gz"
+    mode: '0755'
+    validate_certs: no
+
+- name: Extract Prometheus
+  ansible.builtin.unarchive:
+    src: "/tmp/prometheus_{{ prometheus_version }}.tar.gz"
+    dest: "/tmp/prometheus_{{ prometheus_version }}"
+    remote_src: yes
+
+- name: Move Prometheus binary to /usr/local/bin
+  ansible.builtin.copy:
+    src: "/tmp/prometheus_{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64/prometheus"
+    dest: "{{ prometheus_install_path }}/prometheus"
+    mode: '0755'
+    owner: root
+    group: root
+    remote_src: yes
+
+- name: Move Prometheus console files to /etc/prometheus
+  ansible.builtin.copy:
+    src: "/tmp/prometheus_{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64/consoles"
+    dest: "/etc/prometheus/consoles"
+    remote_src: yes
+  notify: Restart Prometheus
+
+- name: Move Prometheus console_libraries files to /etc/prometheus
+  ansible.builtin.copy:
+    src: "/tmp/prometheus_{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64/console_libraries"
+    dest: "/etc/prometheus/console_libraries"
+    remote_src: yes
+  notify: Restart Prometheus
+
+- name: Ensure Prometheus data directory exists
+  ansible.builtin.file:
+    path: "{{ prometheus_data_dir }}"
+    state: directory
+    owner: prometheus
+    group: prometheus
+    mode: '0755'
+
+- name: Ensure Prometheus config directory exists
+  ansible.builtin.file:
+    path: "/etc/prometheus"
+    state: directory
+
+- name: Copy Prometheus configuration file from template
+  ansible.builtin.template:
+    src: "templates/prometheus.yml.j2"
+    dest: "{{ prometheus_config_path }}"
+    mode: '0644'
+    owner: prometheus
+    group: prometheus
+  notify: Restart Prometheus
+
+- name: Create Prometheus systemd service file
+  ansible.builtin.template:
+    src: "templates/prometheus.service.j2"
+    dest: "/etc/systemd/system/prometheus.service"
+    mode: '0644'
+  notify: Restart Prometheus
+
+- name: Reload systemd to pick up Prometheus service
+  ansible.builtin.systemd:
+    daemon_reload: yes
+
+- name: Start and enable Prometheus service
+  ansible.builtin.systemd:
+    name: prometheus
+    state: started
+    enabled: yes
